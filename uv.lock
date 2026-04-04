@@ -143,10 +143,9 @@ wheels = [
 [[package]]
 name = "log-sentinel"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "pandas" },
-    { name = "pytest" },
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "rich" },
@@ -154,16 +153,22 @@ dependencies = [
     { name = "watchdog" },
 ]
 
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
 [package.metadata]
 requires-dist = [
-    { name = "pandas", specifier = ">=3.0.2" },
-    { name = "pytest", specifier = ">=9.0.2" },
-    { name = "python-dotenv", specifier = ">=1.2.2" },
-    { name = "requests", specifier = ">=2.33.1" },
-    { name = "rich", specifier = ">=14.3.3" },
-    { name = "typer", specifier = ">=0.24.1" },
-    { name = "watchdog", specifier = ">=6.0.0" },
+    { name = "pandas", specifier = ">=2.2" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "requests", specifier = ">=2.32" },
+    { name = "rich", specifier = ">=13.0" },
+    { name = "typer", specifier = ">=0.12" },
+    { name = "watchdog", specifier = ">=4.0" },
 ]
+provides-extras = ["dev"]
 
 [[package]]
 name = "markdown-it-py"
