@@ -1,4 +1,5 @@
 import os
+import ipaddress
 import numpy as np
 import pandas as pd
 import torch
@@ -26,6 +27,13 @@ class _Autoencoder(nn.Module):
         return self.decoder(self.encoder(x))
 
 
+def _is_internal(ip: str) -> bool:
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
+
+
 def _build_ip_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
@@ -46,11 +54,23 @@ def _build_ip_features(df: pd.DataFrame) -> pd.DataFrame:
             "failed_ratio": failed / total,
         })
 
-    # include_groups=False evita el FutureWarning de pandas 2.2
     return df.groupby("source_ip").apply(agg, include_groups=False).reset_index()
 
 
-def _train(X: np.ndarray, threshold_percentile: int = 60, epochs: int = 60) -> tuple:
+def _apply_rules(feat_df: pd.DataFrame) -> pd.Series:
+    flagged = pd.Series(False, index=feat_df.index)
+    flagged |= feat_df["failed_count"] >= 8
+    flagged |= feat_df["invalid_user_count"] >= 3
+    flagged |= feat_df["failed_ratio"] >= 0.9
+    return flagged
+
+
+def detect_anomalies(df: pd.DataFrame, threshold_percentile: int = 60) -> pd.DataFrame:
+    clean = df.dropna(subset=["source_ip"])
+    feat_df = _build_ip_features(clean)
+    feat_df["_internal"] = feat_df["source_ip"].apply(_is_internal)
+
+    X = feat_df[FEATURES].values
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     X_t = torch.FloatTensor(X_scaled)
@@ -60,7 +80,7 @@ def _train(X: np.ndarray, threshold_percentile: int = 60, epochs: int = 60) -> t
     loss_fn = nn.MSELoss()
 
     model.train()
-    for _ in range(epochs):
+    for _ in range(80):
         optimizer.zero_grad()
         loss = loss_fn(model(X_t), X_t)
         loss.backward()
@@ -70,25 +90,25 @@ def _train(X: np.ndarray, threshold_percentile: int = 60, epochs: int = 60) -> t
     with torch.no_grad():
         errors = ((model(X_t) - X_t) ** 2).mean(dim=1).numpy()
 
-    threshold = np.percentile(errors, threshold_percentile)
-    return model, scaler, threshold
+    e_min, e_max = errors.min(), errors.max()
+    scores = (errors - e_min) / (e_max - e_min) if e_max > e_min else np.zeros_like(errors)
 
+    threshold = np.percentile(scores, threshold_percentile)
+    rule_flags = _apply_rules(feat_df)
 
-def detect_anomalies(df: pd.DataFrame, threshold_percentile: int = 60) -> pd.DataFrame:
-    clean = df.dropna(subset=["source_ip"])
-    feat_df = _build_ip_features(clean)
-    X = feat_df[FEATURES].values
+    feat_df["anomaly_score"] = scores.round(4)
 
-    model, scaler, threshold = _train(X, threshold_percentile)
+    # externos: modelo O (reglas con score mínimo que justifique el flag)
+    # internos: solo reglas, el modelo nunca los flaggea solo
+    external_mask = ~feat_df["_internal"]
+    internal_mask = feat_df["_internal"]
 
-    X_scaled = scaler.transform(X)
-    X_t = torch.FloatTensor(X_scaled)
-    model.eval()
-    with torch.no_grad():
-        errors = ((model(X_t) - X_t) ** 2).mean(dim=1).numpy()
-
-    feat_df["anomaly_score"] = (errors / errors.max()).round(4)
-    feat_df["is_anomaly"] = (errors > threshold)
+    feat_df["is_anomaly"] = False
+    feat_df.loc[external_mask, "is_anomaly"] = (
+        (feat_df.loc[external_mask, "anomaly_score"] > threshold)
+        | (rule_flags[external_mask] & (feat_df.loc[external_mask, "anomaly_score"] > 0.2))
+    )
+    feat_df.loc[internal_mask, "is_anomaly"] = rule_flags[internal_mask]
 
     return df.merge(
         feat_df[["source_ip", "anomaly_score", "is_anomaly"]],
@@ -111,7 +131,7 @@ def summarize_incidents(df: pd.DataFrame) -> str:
         .to_string(index=False)
     )
 
-    model = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+    ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
     prompt = (
         "You are a SOC analyst reviewing flagged SSH log entries. "
         "Summarize the following anomalous activity in 3-5 sentences. "
@@ -121,7 +141,7 @@ def summarize_incidents(df: pd.DataFrame) -> str:
     )
 
     response = ollama.chat(
-        model=model,
+        model=ollama_model,
         messages=[{"role": "user", "content": prompt}],
     )
     return response["message"]["content"]
