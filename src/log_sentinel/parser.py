@@ -1,7 +1,6 @@
 import pandas as pd
 import re
 from pathlib import Path
-from datetime import datetime
 
 # Parte 1 - Parser
 AUTH_PATTERN = re.compile(
@@ -26,7 +25,7 @@ def parse_auth_log(path: Path) -> pd.DataFrame:
 # Parte 2 - Normalizer
 EVENT_PATTERNS = {
     'failed_login': re.compile(r'Failed password for'),
-    'successful_login': re.compile(r'Accepted (password|publickey) for'),
+    'successful_login': re.compile(r'Accepted (?:password|publickey) for'),
     'invalid_user': re.compile(r'Invalid user'),
     'disconnected': re.compile(r'Disconnected from'),
 }

@@ -46,10 +46,11 @@ def _build_ip_features(df: pd.DataFrame) -> pd.DataFrame:
             "failed_ratio": failed / total,
         })
 
-    return df.groupby("source_ip").apply(agg).reset_index()
+    # include_groups=False evita el FutureWarning de pandas 2.2
+    return df.groupby("source_ip").apply(agg, include_groups=False).reset_index()
 
 
-def _train(X: np.ndarray, epochs: int = 60) -> tuple:
+def _train(X: np.ndarray, threshold_percentile: int = 60, epochs: int = 60) -> tuple:
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     X_t = torch.FloatTensor(X_scaled)
@@ -69,16 +70,16 @@ def _train(X: np.ndarray, epochs: int = 60) -> tuple:
     with torch.no_grad():
         errors = ((model(X_t) - X_t) ** 2).mean(dim=1).numpy()
 
-    threshold = errors.mean() + 2 * errors.std()
+    threshold = np.percentile(errors, threshold_percentile)
     return model, scaler, threshold
 
 
-def detect_anomalies(df: pd.DataFrame) -> pd.DataFrame:
+def detect_anomalies(df: pd.DataFrame, threshold_percentile: int = 60) -> pd.DataFrame:
     clean = df.dropna(subset=["source_ip"])
     feat_df = _build_ip_features(clean)
     X = feat_df[FEATURES].values
 
-    model, scaler, threshold = _train(X)
+    model, scaler, threshold = _train(X, threshold_percentile)
 
     X_scaled = scaler.transform(X)
     X_t = torch.FloatTensor(X_scaled)
@@ -87,7 +88,7 @@ def detect_anomalies(df: pd.DataFrame) -> pd.DataFrame:
         errors = ((model(X_t) - X_t) ** 2).mean(dim=1).numpy()
 
     feat_df["anomaly_score"] = (errors / errors.max()).round(4)
-    feat_df["is_anomaly"] = errors > threshold
+    feat_df["is_anomaly"] = (errors > threshold)
 
     return df.merge(
         feat_df[["source_ip", "anomaly_score", "is_anomaly"]],
