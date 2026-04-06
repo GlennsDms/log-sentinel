@@ -58,31 +58,29 @@ def _export_markdown(anomalies, df, summary: str, log_path: Path, output_path: P
 @app.command()
 def analyze(
     log_path: Path = typer.Argument(..., help="Ruta al archivo de log a analizar"),
-    enrich: bool = typer.Option(False, "--enrich", help="Consultar AbuseIPDB para cada IP anomala"),
-    threshold: int = typer.Option(60, "--threshold", min=1, max=99, help="Percentil de corte (default: 60)"),
-    output: Path = typer.Option(None, "--output", help="Guardar reporte en un archivo Markdown"),
 ):
-    if not log_path.exists():
-        console.print(f"[red]File not found: {log_path}[/red]")
-        raise typer.Exit(1)
-
+    # Paso 1 - Parsear
     console.print("[bold cyan]Parseando log...[/bold cyan]")
     df = parse_auth_log(log_path)
 
     if df.empty:
         console.print("[bold red]No se encontraron eventos en el log.[/bold red]")
-        raise typer.Exit(1)
+        raise typer.Exit()
 
+    # Paso 2 - Normalizar
     console.print("[bold cyan]Normalizando...[/bold cyan]")
     df = normalize(df)
 
+    # Paso 3 - Detectar anomalías
     console.print("[bold cyan]Detectando anomalías...[/bold cyan]")
-    df = detect_anomalies(df, threshold_percentile=threshold)
+    df = detect_anomalies(df)
 
-    anomalies = df[df["is_anomaly"].eq(True)].drop_duplicates(subset=["source_ip"])
+    # Paso 4 - Tabla de anomalías
+    anomalies = df[df["is_anomaly"] == True]
 
     table = Table(title="Anomalías detectadas", box=box.ROUNDED)
     table.add_column("IP origen", style="red")
+    table.add_column("Tipo de evento", style="yellow")
     table.add_column("Score", style="magenta")
     table.add_column("Fallos", style="yellow")
     table.add_column("Usuarios inválidos", style="yellow")
@@ -102,17 +100,9 @@ def analyze(
 
     console.print(table)
 
-    summary = ""
-    if not anomalies.empty:
-        console.print("\n[bold green]Resumen del incidente:[/bold green]")
-        flagged = df[df["is_anomaly"].eq(True)]
-        summary = summarize_incidents(flagged)
-        console.print(summary)
-
-    if output:
-        _export_markdown(anomalies, df, summary, log_path, output, enrich)
-        console.print(f"\n[bold]Reporte guardado en:[/bold] {output}")
-
+    # Paso 5 - Resumen
+    console.print("\n[bold green]Resumen del incidente:[/bold green]")
+    console.print(summarize_incidents(df))
 
 if __name__ == "__main__":
     app()
